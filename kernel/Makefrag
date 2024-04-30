@@ -1,0 +1,108 @@
+KERNEL_CFLAGS   += -fno-pic -mno-red-zone
+KERNEL_CFLAGS   += -mno-mmx -mno-sse
+IOMMU     ?= intel-iommu
+
+ICOUNT ?= 10
+QEMUOPTS += -m 16M
+QEMUEXTRA += -rtc clock=vm 
+
+CONFIG_CGA    := 1
+CONFIG_KBD    := 1
+CONFIG_UART_8250  := 1
+CONFIG_UART_PORTE9  := 1
+CONFIG_ACPI   := 1
+CONFIG_E1000    := 1
+
+XK_BIN		:= $(O)/xk.bin
+XK_ELF		:= $(basename $(XK_BIN)).elf
+XK_ASM		:= $(basename $(XK_BIN)).asm
+XK_IMG		:= $(basename $(XK_BIN)).img
+
+XK_KERNEL_SRCS := $(shell find kernel/ -type f \( -name '*.c' -o -name '*.S' \) \( ! -name 'boot*' ! -name '*.lds.S' ! -name 'initcode.S' ! -name 'memide.c' \))
+XK_KERNEL_OBJS	:= $(addprefix $(O)/,$(patsubst %.c,%.o,$(patsubst %.S,%.o,$(XK_KERNEL_SRCS))))
+
+LDFLAGS_KERNEL   := -m elf_x86_64 --oformat elf64-x86-64
+
+GDBPORT	:= $(shell expr `id -u` % 5000 + 25000)
+QEMUGDB := -gdb tcp::$(GDBPORT)
+
+$(O)/initcode : kernel/initcode.S
+	$(CC) -nostdinc -I inc -c kernel/initcode.S -o $(O)/initcode.o
+	$(LD) $(LDFLAGS) -N -e start -Ttext 0x10000 -o $(O)/initcode.out $(O)/initcode.o
+	$(OBJCOPY) -S -O binary $(O)/initcode.out $(O)/initcode
+	$(OBJDUMP) -S $(O)/initcode.o > $(O)/initcode.asm
+
+
+
+$(O)/bootblock: kernel/bootasm.S kernel/bootmain.c
+	$(CC) -m32 -fno-pic -Os -I inc -c kernel/bootmain.c -o $(O)/bootmain.o
+	$(CC) -m32 -fno-pic -nostdinc -I inc -c kernel/bootasm.S -o $(O)/bootasm.o
+	$(LD) $(LDFLAGS) -m elf_i386 -N -e start -Ttext 0x7C00 -o $(O)/bootblock.o $(O)/bootasm.o $(O)/bootmain.o
+	$(OBJDUMP) -S $(O)/bootblock.o > $(O)/bootblock.asm
+	$(OBJCOPY) -S -O binary -j .text $(O)/bootblock.o $(O)/bootblock
+	./sign.pl $(O)/bootblock
+
+xk: $(XK_BIN) $(XK_ASM) $(O)/bootblock $(O)/xk.img
+
+$(XK_ELF): $(XK_KERNEL_OBJS) $(KERNEL_LDS) $(O)/initcode
+	$(QUIET_LD)$(LD) $(LDFLAGS_KERNEL) -o $@ -T $(KERNEL_LDS) $(XK_KERNEL_OBJS) -b binary $(O)/initcode
+
+$(O)/xk.img: $(O)/bootblock $(XK_ASM)
+	dd if=/dev/zero of=$(O)/xk.img count=10000
+	dd if=$(O)/bootblock of=$(O)/xk.img conv=notrunc
+	dd if=$(XK_ELF) of=$(O)/xk.img seek=1 conv=notrunc
+
+xk-qemu: xk $(O)/fs.img
+	$(QEMU) $(QEMUOPTS_TCG) $(QEMUIO) $(QEMUOPTS) \
+	-icount shift=$(ICOUNT) \
+	-drive file=$(O)/fs.img,index=1,media=disk,format=raw -drive file=$(O)/xk.img,index=0,media=disk,format=raw
+
+xk-qemu-gdb: xk $(O)/fs.img
+	sed "s/ELF/xk.elf/" < .gdbinit.tmpl > .gdbinit.tmpl1
+	sed "s/0.0.0.0:1234/localhost:$(GDBPORT)/" < .gdbinit.tmpl1 > .gdbinit
+	$(QEMU) $(QEMUOPTS_TCG) $(QEMUIO) $(QEMUOPTS) \
+	-icount shift=$(ICOUNT)	\
+	-drive file=$(O)/fs.img,index=1,media=disk,format=raw -drive file=$(O)/xk.img,index=0,media=disk,format=raw -S $(QEMUGDB)
+
+# record and replay only work with single cpu
+# requires stdio instead of mon:stdio, meaning we use ctrl c to exit qemu
+xk-qemu-record: xk $(O)/fs.img
+ifneq ($(NR_CPUS), 1)
+	echo "can't record when running on more than 1 cpu"
+endif
+	$(QEMU) $(QEMUOPTS_TCG) $(QEMUOPTS) \
+	-serial stdio -net none \
+	-icount shift=10,sleep=on,rr=record,rrfile=replay.bin	\
+	-drive file=$(O)/xk.img,format=raw,if=none,id=xkd \
+	-drive file=$(O)/fs.img,format=raw,if=none,id=fsd \
+	-drive driver=blkreplay,if=none,image=xkd,id=xkr	\
+	-drive driver=blkreplay,if=none,image=fsd,id=fsr -device ide-hd,drive=xkr,bus=ide.0 -device ide-hd,drive=fsr,bus=ide.0	
+
+xk-qemu-replay: xk $(O)/fs.img replay.bin
+ifneq ($(NR_CPUS), 1)
+	echo "can't replay when running on more than 1 cpu"
+endif
+	$(QEMU) $(QEMUOPTS_TCG) $(QEMUOPTS) \
+	-serial stdio -net none \
+	-icount shift=10,sleep=on,rr=replay,rrfile=replay.bin	\
+	-drive file=$(O)/xk.img,format=raw,if=none,id=xkd \
+	-drive file=$(O)/fs.img,format=raw,if=none,id=fsd \
+	-drive driver=blkreplay,if=none,image=xkd,id=xkr	\
+	-drive driver=blkreplay,if=none,image=fsd,id=fsr -device ide-hd,drive=xkr,bus=ide.0 -device ide-hd,drive=fsr,bus=ide.0
+
+xk-qemu-gdb-replay: xk $(O)/fs.img replay.bin
+ifneq ($(NR_CPUS), 1)
+	echo "can't replay when running on more than 1 cpu"
+endif
+	sed "s/ELF/xk.elf/" < .gdbinit.tmpl > .gdbinit.tmpl1
+	sed "s/0.0.0.0:1234/localhost:$(GDBPORT)/" < .gdbinit.tmpl1 > .gdbinit
+	$(QEMU) $(QEMUOPTS_TCG) $(QEMUOPTS) \
+	-serial stdio -net none \
+	-icount shift=10,sleep=on,rr=replay,rrfile=replay.bin	\
+	-drive file=$(O)/xk.img,format=raw,if=none,id=xkd \
+	-drive file=$(O)/fs.img,format=raw,if=none,id=fsd \
+	-drive driver=blkreplay,if=none,image=xkd,id=xkr	\
+	-drive driver=blkreplay,if=none,image=fsd,id=fsr -device ide-hd,drive=xkr,bus=ide.0 -device ide-hd,drive=fsr,bus=ide.0 -S $(QEMUGDB)
+
+xk-gdb: .gdbinit
+	$(GDB)

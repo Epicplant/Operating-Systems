@@ -1,0 +1,79 @@
+#1
+cpuid_print(); on line 22 prints out the cpu info
+e820_print(); on line 23 prints out the physical memory map/table
+
+#2
+Main is at 0xffffffff80101711 / 0xffffffff80109852 (different for both of us)
+Virtual. As to how I found this out, I read in the text OS Principles
+and Practices that all applications were essentially given the illusion
+of "infinite memory" through virtual memory by the OS. After this,
+I sought to confirm that GDB explicitly did the same, and I checked
+the following source which confirmed my suspicions:
+https://stackoverflow.com/questions/7658135/how-can-we-get-the-physical-address-in-gdb
+	
+#3 
+1. So that the kernel’s system call code can directly refer to user memory.
+2. Helps organize memory better, as now if the kernel needs
+to focus on a different process it can leave what it was
+doing in the user process and simply return to it later.
+3. If a context switch occurred we’d need to likely override
+virtual memory mappings from the cache, which would ultimately
+make computations when swapping the kernel and user more expensive
+(as we can’t rely on cache for frequently used memory between both of them).
+
+#4 
+
+Kalloc vs. Malloc
+Kalloc utilizes locks to make it thread safe while malloc isn’t inherently thread safe
+Malloc utilizes dynamic memory and headers whereas kalloc uses page tables
+
+pfrintf vs. cprintf
+cprintf explicitly prints to the console while printf prints to a location specified by a file descriptor.
+cprintf utilizes locks to make it thread safe whale printf isn’t inherently thread safe.
+
+#5
+35: if (tf->trapno == TRAP_SYSCALL)
+#6 How large (in bytes) is a trap frame? (Hint: GDB's print command can print the value of arbitrary C expressions, including sizeof expressions. print is very powerful because of this).
+print sizeof(struct trap_frame) = 176
+
+#7 
+Syscall, trap, alltraps
+
+
+#8
+It is not safe to use arguments without validation.
+In the example of calling read, if the pointer is null and we don’t
+check to see if it isn’t, we could end up having the kernel crash.
+Considering that the kernel is supposed to essentially be
+crash proof this is unacceptable, with it likely being better
+for us to return an error code/message instead.
+Additionally, there could buffer overflow
+IN the OS which could give the user access to areas of memory that are restricted.
+
+#9
+
+THIS ASSUMES YOU CAN ACCESS RESTRICTED MEMORY
+Benefit: It would give the user the ability to know where they are in the file without having to keep track of that information themselves
+Harm: It allows the user to modify data stored within the OS, which violates the separation of user from the OS (potentially resulting in a security breach and malicious corruption of OS systems)
+
+Question #10
+For each member of the project team, how many hours did you spend on this lab?
+
+Anderson: 8 hours
+Chris: 10 hours
+
+Question #11
+
+Likes:
+How short it was
+How given tests are the source of truth for grade’
+Very clear instructions
+
+Dislikes:
+Be a bit more clear on what needed adding to proc.h
+Wish we had known what the TAs did in defs.h
+
+Things We Wished We Knew Earlier:
+What an inode was
+
+

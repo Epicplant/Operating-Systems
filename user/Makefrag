@@ -1,0 +1,26 @@
+ULIB_SRCS := $(shell find user/lib/ -type f -name '*.c' -o -name '*.S')
+ULIB	:= $(addprefix $(O)/,$(patsubst %.c,%.o,$(patsubst %.S,%.o,$(ULIB_SRCS))))
+
+XK_UPROGS_SRCS := $(shell find user/ -type f \( -name '*.c' -o -name '*.S' \) ! -path 'user/lib/*')
+XK_UPROGS	:= $(addprefix $(O)/,$(patsubst %.c,%,$(patsubst %.S,%,$(subst user/, user/_,$(XK_UPROGS_SRCS)))))
+
+XK_TEXT_FILES := \
+ 	$(O)/user/small.txt \
+ 	$(O)/user/l2_share.txt \
+
+XK_UPROGS_OBJS := $(addsuffix .o,$(XK_UPROGS))
+
+XK_UPROGS_ASMS := $(addsuffix .asm,$(XK_UPROGS))
+
+$(O)/user/_%: $(O)/user/%.o $(ULIB)
+	$(LD) $(LDFLAGS) -e preface -Ttext 0x10000 -o $@ $^
+	$(OBJDUMP) -S $@ > $@.asm
+
+$(O)/user/%.txt:
+	cp user/$*.txt $@
+
+$(O)/mkfs: mkfs.c
+	$(QUIET_GEN)$(HOST_CC) -I . -o $@ $<
+
+$(O)/fs.img: $(O)/mkfs $(XK_UPROGS) $(XK_TEXT_FILES)
+	$(QUIET_GEN)$(O)/mkfs $@ $(XK_UPROGS) $(XK_TEXT_FILES) > /dev/null

@@ -1,0 +1,60 @@
+define kern
+  symbol out/ELF
+end
+
+define load-prog
+  add-symbol-file out/user/_$arg0 0x10000
+end
+
+define sh
+  add-symbol-file out/user/_sh 0x10000
+end
+
+define init
+  add-symbol-file out/user/_init 0x10000
+end
+
+define lab1test
+  add-symbol-file out/user/_lab1test 0x10000
+end
+
+define lab2test
+  add-symbol-file out/user/_lab2test 0x10000
+end
+
+define lab3test
+  add-symbol-file out/user/_lab3test 0x10000
+end
+
+define lab4test_a
+  add-symbol-file out/user/_lab4test_a 0x10000
+end
+
+define lab4test_b
+  add-symbol-file out/user/_lab4test_b 0x10000
+end
+
+define lab4test_c
+  add-symbol-file out/user/_lab4test_c 0x10000
+end
+
+define initcode
+  add-symbol-file out/initcode.out 0x10000
+end
+
+define pass_sc
+  while ($cs == 8)
+    ni
+  end
+end
+
+set arch i386:x86-64:intel
+target remote 0.0.0.0:1234
+symbol out/ELF
+b main
+c
+disconnect
+set arch i386:x86-64
+target remote 0.0.0.0:1234
+c
+source decode-bt.py
